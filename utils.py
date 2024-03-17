@@ -11,8 +11,65 @@ import torch
 
 MATPLOTLIB_FLAG = False
 
-logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
+logging.basicConfig(stream=sys.stdout, level=logging.ERROR)
 logger = logging
+
+def warm_start_model(checkpoint_path, model, ignore_layers):
+    assert os.path.isfile(checkpoint_path)
+    print("Warm starting model from checkpoint '{}'".format(checkpoint_path))
+    checkpoint_dict = torch.load(checkpoint_path, map_location='cpu')
+    model_dict = checkpoint_dict['model']
+
+    random_weight_layer = []
+    mismatched_layers = []
+    unfound_layers = []
+    
+    for key, value in model_dict.items(): # model_dict warmstart weight
+        if hasattr(model, 'module'): # model is current model
+            if key in model.module.state_dict() and value.size() != model.module.state_dict()[key].size():
+                try:
+                    model_dict[key] = transfer_weight(model_dict[key], model.module.state_dict()[key].size())
+                    if model_dict[key].size() != model.module.state_dict()[key].size():
+                      mismatched_layers.append(key)
+                    else:
+                      random_weight_layer.append(key)
+                except:
+                    mismatched_layers.append(key)
+        else:
+            if key in model.state_dict() and value.size() != model.state_dict()[key].size():
+                try:
+                    model_dict[key] = transfer_weight(model_dict[key], model.state_dict()[key].size())
+                    if model_dict[key].size() != model.state_dict()[key].size():
+                      mismatched_layers.append(key)
+                    else:
+                      random_weight_layer.append(key)
+                except:
+                    mismatched_layers.append(key)
+        
+    print("Mismatched")
+    print(mismatched_layers)
+
+    print("random_weight_layer")
+    print(random_weight_layer)
+    
+    ignore_layers = ignore_layers + mismatched_layers
+    if len(ignore_layers) > 0:
+        model_dict = {k: v for k, v in model_dict.items()
+                      if k not in ignore_layers}
+        if hasattr(model, 'module'):
+          dummy_dict = model.module.state_dict()
+          dummy_dict.update(model_dict)
+        else:
+          dummy_dict = model.state_dict()
+          dummy_dict.update(model_dict)
+        model_dict = dummy_dict
+
+    if hasattr(model, 'module'):
+      model.module.load_state_dict(model_dict, strict=False)
+    else:
+      model.load_state_dict(model_dict, strict=False)
+    
+    return model
 
 def load_checkpoint(checkpoint_path, model, optimizer=None):
   assert os.path.isfile(checkpoint_path)
@@ -255,3 +312,24 @@ class HParams():
 
   def __repr__(self):
     return self.__dict__.__repr__()
+
+
+def transfer_weight(original_tensor, target_size):
+    differences = [target_size[i] - original_tensor.size(i) for i in range(len(target_size))]
+    for i, diff in enumerate(differences):
+        if diff > 0:
+            new_dims = list(original_tensor.size())
+            new_dims[i] = diff
+            rand_weight = torch.randn(*new_dims)
+            original_tensor = torch.cat([original_tensor, rand_weight], dim=i)
+        # elif diff < 0:
+        #     slices = []
+        #     for j in range(len(target_size)):
+        #         if j == i:
+        #             slices.append(slice(0, original_tensor.size(j) + diff))
+        #         else:
+        #             slices.append(slice(0, original_tensor.size(j)))
+        #     slices[i] = slice(0, target_size[i])
+        #     original_tensor = original_tensor[slices]
+
+    return original_tensor
