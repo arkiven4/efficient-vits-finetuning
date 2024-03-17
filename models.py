@@ -266,7 +266,7 @@ class PosteriorEncoder(nn.Module):
     x_mask = torch.unsqueeze(commons.sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
     x = self.pre(x) * x_mask
     x = self.enc(x, x_mask, g=g)
-    x = self.enc_emo(x, x_mask, emo=emo)
+    x = self.enc_emo(x, x_mask, g=emo)
     stats = self.proj(x) * x_mask
     m, logs = torch.split(stats, self.out_channels, dim=1)
     z = (m + torch.randn_like(m) * torch.exp(logs)) * x_mask

@@ -1,6 +1,7 @@
 __pycache__
 .ipynb_checkpoints
 .*.swp
+logs
 logs/*.pth
 logs/ljs_base/eval
 build
@@ -8,3 +9,4 @@ build
 monotonic_align/monotonic_align
 pretrained/discriminator.pth
 pretrained/generator.pth
+*.pth

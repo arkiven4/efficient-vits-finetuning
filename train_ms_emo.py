@@ -3,6 +3,7 @@ import json
 import argparse
 import itertools
 import math
+from tqdm import tqdm
 import torch
 from torch import nn, optim
 from torch.nn import functional as F
@@ -44,7 +45,7 @@ def main():
 
   n_gpus = torch.cuda.device_count()
   os.environ['MASTER_ADDR'] = 'localhost'
-  os.environ['MASTER_PORT'] = '80000'
+  os.environ['MASTER_PORT'] = '65535'
 
   hps = utils.get_hparams()
   mp.spawn(run, nprocs=n_gpus, args=(n_gpus, hps,))
@@ -84,7 +85,7 @@ def run(rank, n_gpus, hps):
       len(symbols),
       hps.data.filter_length // 2 + 1,
       hps.train.segment_size // hps.data.hop_length,
-      n_speakers=hps.data.n_speakers,
+      n_lang=hps.data.n_lang,
       **hps.model).cuda(rank)
   net_d = MultiPeriodDiscriminator(hps.model.use_spectral_norm).cuda(rank)
   optim_g = torch.optim.AdamW(
@@ -102,7 +103,18 @@ def run(rank, n_gpus, hps):
 
   if hps.train.warm_start:
       net_g = utils.warm_start_model(hps.train.warm_start_checkpoint_g, net_g, hps.train.ignored_layer_g)
-      net_d = utils.warm_start_model(hps.train.warm_start_checkpoint_d, net_d, hps.train.ignored_layer_d)
+      #net_d = utils.warm_start_model(hps.train.warm_start_checkpoint_d, net_d, hps.train.ignored_layer_d)
+
+      print("loading pretrained discriminator")
+      if hasattr(net_d, 'module'):
+        net_d.module.load_state_dict(torch.load(hps.train.warm_start_checkpoint_d))
+        print("pretrained discriminator loaded")
+      else:
+        net_d.load_state_dict(torch.load(hps.train.warm_start_checkpoint_d))
+        print("pretrained discriminator loaded")
+
+      epoch_str = 1
+      global_step = 0
   else:
     try:
       _, _, _, epoch_str = utils.load_checkpoint(utils.latest_checkpoint_path(hps.model_dir, "G_*.pth"), net_g, optim_g)
@@ -139,7 +151,7 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
 
   net_g.train()
   net_d.train()
-  for batch_idx, (x, x_lengths, spec, spec_lengths, y, y_lengths, spk_embeds, emo_embeds, lids) in enumerate(train_loader):
+  for batch_idx, (x, x_lengths, spec, spec_lengths, y, y_lengths, spk_embeds, emo_embeds, lids) in enumerate(tqdm(train_loader)):
     x, x_lengths = x.cuda(rank, non_blocking=True), x_lengths.cuda(rank, non_blocking=True)
     spec, spec_lengths = spec.cuda(rank, non_blocking=True), spec_lengths.cuda(rank, non_blocking=True)
     y, y_lengths = y.cuda(rank, non_blocking=True), y_lengths.cuda(rank, non_blocking=True)
@@ -177,6 +189,7 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
       with autocast(enabled=False):
         loss_disc, losses_disc_r, losses_disc_g = discriminator_loss(y_d_hat_r, y_d_hat_g)
         loss_disc_all = loss_disc
+
     optim_d.zero_grad()
     scaler.scale(loss_disc_all).backward()
     scaler.unscale_(optim_d)
@@ -194,6 +207,7 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
         loss_fm = feature_loss(fmap_r, fmap_g)
         loss_gen, losses_gen = generator_loss(y_d_hat_g)
         loss_gen_all = loss_gen + loss_fm + loss_mel + loss_dur + loss_kl
+
     optim_g.zero_grad()
     scaler.scale(loss_gen_all).backward()
     scaler.unscale_(optim_g)
@@ -205,10 +219,10 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
       if global_step % hps.train.log_interval == 0:
         lr = optim_g.param_groups[0]['lr']
         losses = [loss_disc, loss_gen, loss_fm, loss_mel, loss_dur, loss_kl]
-        logger.info('Train Epoch: {} [{:.0f}%]'.format(
-          epoch,
-          100. * batch_idx / len(train_loader)))
-        logger.info([x.item() for x in losses] + [global_step, lr])
+        # logger.info('Train Epoch: {} [{:.0f}%]'.format(
+        #   epoch,
+        #   100. * batch_idx / len(train_loader)))
+        # logger.info([x.item() for x in losses] + [global_step, lr])
         
         scalar_dict = {"loss/g/total": loss_gen_all, "loss/d/total": loss_disc_all, "learning_rate": lr, "grad_norm_d": grad_norm_d, "grad_norm_g": grad_norm_g}
         scalar_dict.update({"loss/g/fm": loss_fm, "loss/g/mel": loss_mel, "loss/g/dur": loss_dur, "loss/g/kl": loss_kl})

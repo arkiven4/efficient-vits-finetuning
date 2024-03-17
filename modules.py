@@ -304,6 +304,7 @@ class ResidualCouplingLayer(nn.Module):
       n_layers,
       p_dropout=0,
       gin_channels=0,
+      emoin_channels=0,
       mean_only=False):
     assert channels % 2 == 0, "channels should be divisible by 2"
     super().__init__()
@@ -317,14 +318,16 @@ class ResidualCouplingLayer(nn.Module):
 
     self.pre = nn.Conv1d(self.half_channels, hidden_channels, 1)
     self.enc = WN(hidden_channels, kernel_size, dilation_rate, n_layers, p_dropout=p_dropout, gin_channels=gin_channels)
+    self.enc_emo = WN(hidden_channels, kernel_size, dilation_rate, n_layers, p_dropout=p_dropout, gin_channels=emoin_channels)
     self.post = nn.Conv1d(hidden_channels, self.half_channels * (2 - mean_only), 1)
     self.post.weight.data.zero_()
     self.post.bias.data.zero_()
 
-  def forward(self, x, x_mask, g=None, reverse=False):
+  def forward(self, x, x_mask, g=None, emo=None, reverse=False):
     x0, x1 = torch.split(x, [self.half_channels]*2, 1)
     h = self.pre(x0) * x_mask
     h = self.enc(h, x_mask, g=g)
+    h = self.enc_emo(h, x_mask, g=emo)
     stats = self.post(h) * x_mask
     if not self.mean_only:
       m, logs = torch.split(stats, [self.half_channels]*2, 1)

@@ -1,0 +1,2 @@
+source /run/media/viblab/Markov2/Pras/Thesis/TryMyOwn/glow-tts/.env/bin/activate
+TORCH_DISTRIBUTED_DEBUG=DETAIL python train_ms_emo.py -c configs/custom_base_spk_emo.json -m custom_base_spk_emo
